@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Golden Christmas | No Placeholders</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=Space+Mono:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+
+    <style>
+        :root { --gold: #FFD700; --bg: #000000; }
+        body { margin: 0; overflow: hidden; background-color: var(--bg); font-family: 'Space Mono', monospace; user-select: none; }
+        
+        #canvas-container { position: fixed; inset: 0; z-index: 1; }
+        
+        /* 视觉特效 */
+    .fx-vignette {
+            position: fixed; inset: 0; pointer-events: none; z-index: 20;
+            /* 👇 改了这里：把最后的 #000 改成了半透明黑色，让界面变亮 */
+            background: radial-gradient(circle at center, transparent 10%, rgba(0,0,0,0.5) 130%);
+        }
+        
+        .fx-grain {
+            position: fixed; inset: 0; pointer-events: none; z-index: 21; opacity: 0.05;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+        }
+
+        /* UI 布局 */
+        #ui-layer {
+            position: fixed; inset: 0; z-index: 30; pointer-events: none;
+            padding: 20px; display: flex; flex-direction: column; justify-content: space-between;
+        }
+
+        #title-container { position: absolute; top: 5%; width: 100%; text-align: center; pointer-events: none; }
+        .hero-title {
+            font-family: 'Cinzel Decorative', cursive; font-size: 4rem; color: var(--gold);
+            text-shadow: 0 0 30px rgba(255, 215, 0, 0.8);
+            animation: pulse 3s infinite ease-in-out;
+        }
+        @keyframes pulse { 0%,100%{opacity:0.9; text-shadow:0 0 30px var(--gold);} 50%{opacity:1; text-shadow:0 0 60px var(--gold);} }
+
+        .hud-row { display: flex; justify-content: space-between; align-items: flex-start; }
+        .hud-text {
+            font-size: 11px; color: rgba(255,255,255,0.6); background: rgba(0,0,0,0.6);
+            padding: 12px; border: 1px solid rgba(255, 215, 0, 0.3); backdrop-filter: blur(5px);
+        }
+        .highlight { color: var(--gold); font-weight: bold; }
+
+        /* 预览窗 */
+        #holo-preview {
+            width: 220px; height: 165px; position: relative;
+            border: 2px solid var(--gold); background: #000;
+            pointer-events: auto; box-shadow: 0 0 15px rgba(255, 215, 0, 0.3);
+        }
+        #output_canvas { width: 100%; height: 100%; transform: scaleX(-1); }
+        .preview-label { position: absolute; bottom: 5px; left: 10px; font-size: 10px; color: var(--gold); }
+
+        /* 加载条 */
+        #loader {
+            position: fixed; inset: 0; background: #000; z-index: 100;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            transition: opacity 0.5s;
+        }
+        .loader-bar { width: 0%; height: 3px; background: var(--gold); box-shadow: 0 0 20px var(--gold); transition: width 0.2s; }
+
+        #input_video { position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; z-index: -1; }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://esm.sh/three@0.150.0",
+                "three/addons/": "https://esm.sh/three@0.150.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loader">
+        <div style="color:var(--gold); margin-bottom:15px; font-size:12px; letter-spacing: 0.2em;">LOADING PHOTOS...</div>
+        <div style="width:240px; height:3px; background:#222;"><div class="loader-bar" id="load-bar"></div></div>
+    </div>
+    
+    <div class="fx-vignette"></div>
+    <div class="fx-grain"></div>
+
+    <div id="ui-layer">
+        <div id="title-container"><div class="hero-title">MERRY CHRISTMAS</div></div>
+        
+        <div class="hud-row">
+            <div class="hud-text">
+                <span class="highlight">VISUAL</span> :: TRANSPARENT IF MISSING<br>
+                <span class="highlight">MODE</span> :: LOCAL PHOTOS (1-56)
+            </div>
+            <div class="hud-text" style="text-align: right;">
+                <span class="highlight">RIGHT HAND</span> ROTATE (SCREW NAV)<br>
+                <span class="highlight">LEFT HAND</span> PINCH TO MAXIMIZE
+            </div>
+        </div>
+
+        <div class="hud-row" style="margin-top: auto; align-items: flex-end;">
+            <div id="holo-preview">
+                <canvas id="output_canvas"></canvas>
+                <div class="preview-label">HAND SENSOR</div>
+            </div>
+            <div class="hud-text" style="text-align: right;">
+                <span id="status-text">SYSTEM READY</span><br>
+                <span style="opacity:0.5">V.NO_GREY_BOX</span>
+            </div>
+        </div>
+    </div>
+
+    <video id="input_video" autoplay playsinline></video>
+    <div id="canvas-container"></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // === 配置 ===
+        const CONFIG = {
+            particles: 5000, 
+            photos: 60, 
+            totalImagesYouHave: 56, // ❗你的实际照片数量
+            gold: new THREE.Color(0xFFD700),
+            red: new THREE.Color(0xFF0000),
+            green: new THREE.Color(0x00FF00),
+            spiralHeight: 1200, 
+            spiralTurns: 3,     
+            controls: { 
+                deadZone: 0.1, speed: 0.04, damping: 0.92, pinch: 0.05, 
+                maxRotLeft: 2 * Math.PI * 3,  
+                maxRotRight: -2 * Math.PI * 1 
+            }
+        };
+
+        const state = { mode: 'tree', loaded: false, rot: { y: 0, speed: 0 }, interact: { active: null, hover: null }, mix: { val: 1 } };
+        
+        let scene, camera, renderer, composer;
+        let world, photoGroup, star, snow;
+        let sphereMesh, cubeMesh; 
+        let dummy = new THREE.Object3D();
+        const pData = { spheres: [], cubes: [] }; 
+
+        let raycaster, clock;
+        const photoObjs = [], photoTgt = { tree: [], spiral: [] };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 5000);
+            camera.position.set(0, 0, 1600);
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+            renderer.toneMapping = THREE.ReinhardToneMapping;
+            renderer.toneMappingExposure = 1.0; 
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            const renderPass = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0.85; 
+            bloomPass.strength = 0.6; 
+            bloomPass.radius = 0.5;
+            
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderPass);
+            composer.addPass(bloomPass);
+
+            world = new THREE.Group();
+            scene.add(world);
+            photoGroup = new THREE.Group();
+            photoGroup.renderOrder = 9999; 
+            world.add(photoGroup);
+
+            raycaster = new THREE.Raycaster();
+            clock = new THREE.Clock();
+
+            createInstancedParticles();
+            createPhotosWithFrames();
+            createStar();
+            createSnow();
+
+            animate();
+            
+            let p = 0; const bar = document.getElementById('load-bar');
+            const iv = setInterval(()=>{
+                p+=4; bar.style.width = p+"%";
+                if(p>=100) {
+                    clearInterval(iv);
+                    document.getElementById('loader').style.opacity = 0;
+                    setTimeout(()=>document.getElementById('loader').style.display='none', 500);
+                    state.loaded = true;
+                    transform('tree', 100); 
+                }
+            }, 30);
+        }
+
+        function createInstancedParticles() {
+            const sphereGeo = new THREE.SphereGeometry(4, 16, 16);
+            const cubeGeo = new THREE.BoxGeometry(3, 3, 3); 
+
+            const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const cubeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+            const sphereCount = Math.floor(CONFIG.particles * 0.85);
+            const cubeCount = CONFIG.particles - sphereCount;
+
+            sphereMesh = new THREE.InstancedMesh(sphereGeo, sphereMat, sphereCount);
+            cubeMesh = new THREE.InstancedMesh(cubeGeo, cubeMat, cubeCount);
+            
+            sphereMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            cubeMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            
+            world.add(sphereMesh);
+            world.add(cubeMesh);
+
+            initInstanceData(sphereMesh, pData.spheres, sphereCount, true);
+            initInstanceData(cubeMesh, pData.cubes, cubeCount, false);
+        }
+
+        function initInstanceData(mesh, dataArray, count, isSphere) {
+            const colors = [];
+            for (let i = 0; i < count; i++) {
+                let color;
+                if (isSphere) {
+                    color = Math.random() > 0.25 ? CONFIG.gold : CONFIG.red;
+                } else {
+                    color = CONFIG.green;
+                }
+                colors.push(color.r, color.g, color.b);
+
+                const scale = isSphere ? (Math.random() * 1.5 + 0.8) : (Math.random() * 1.2 + 0.5);
+
+                const h = 1600; const yT = -h / 2 + Math.random() * h;
+                const pct = (yT + h / 2) / h;
+                const rBase = 700 * (1 - pct);
+                const rT = rBase * Math.pow(Math.random(), 0.3); 
+                const thetaT = i * 0.1 + yT * 0.05;
+                const tPos = new THREE.Vector3(Math.cos(thetaT) * rT, yT, Math.sin(thetaT) * rT);
+
+                const rS = 1200 + Math.random() * 600;
+                const thetaS = Math.random() * Math.PI * 2;
+                const yS = (Math.random() - 0.5) * 2200;
+                const sPos = new THREE.Vector3(Math.cos(thetaS) * rS, yS, Math.sin(thetaS) * rS);
+
+                dataArray.push({ tPos, sPos, scale, speed: Math.random() * 0.5 + 0.5 });
+
+                dummy.position.copy(tPos);
+                dummy.scale.set(scale, scale, scale);
+                dummy.updateMatrix();
+                mesh.setMatrixAt(i, dummy.matrix);
+            }
+            mesh.instanceMatrix.needsUpdate = true;
+            mesh.setColorAt(0, new THREE.Color());
+            mesh.instanceColor.set(colors);
+            mesh.instanceColor.needsUpdate = true;
+        }
+
+        // === 核心修改：无灰色占位符的照片加载 ===
+        function createPhotosWithFrames() {
+            const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
+            const photoGeo = new THREE.PlaneGeometry(120, 160);
+            const frameGeo = new THREE.PlaneGeometry(130, 170); 
+            const frameMat = new THREE.MeshBasicMaterial({ color: CONFIG.gold, depthTest: false });
+
+            for(let i=0; i<CONFIG.photos; i++) {
+                const photoMat = new THREE.MeshBasicMaterial({ color: 0x666666, side: THREE.DoubleSide });
+                
+                const group = new THREE.Group();
+                const frame = new THREE.Mesh(frameGeo, frameMat);
+                const photo = new THREE.Mesh(photoGeo, photoMat);
+                frame.position.z = -1; 
+                group.add(frame);
+                group.add(photo);
+                
+                group.renderOrder = 9999;
+                frame.renderOrder = 9999;
+                photo.renderOrder = 10000;
+
+                // 1. 默认缩放为 0
+                group.scale.set(0, 0, 0); 
+                // 2. 默认不可见 (防止灰色方块)
+                group.visible = false; 
+
+                group.userData = { id: i }; 
+                photoGroup.add(group);
+                photoObjs.push(group); 
+
+                // 图片加载逻辑
+                const imgIndex = (i % CONFIG.totalImagesYouHave) + 1;
+                const imgPath = `./photos/${imgIndex}.jpg`;
+
+                setTimeout(() => {
+                    loader.load(imgPath, 
+                        (t) => {
+                            photoMat.map = t; 
+                            photoMat.color.setHex(0xFFFFFF); 
+                            photoMat.needsUpdate = true;
+                            // 3. 只有加载成功，才设置为可见
+                            group.visible = true; 
+                        },
+                        undefined,
+                        (err) => { 
+                            // 加载失败 (如文件不存在)，保持不可见 (相当于跳过)
+                            console.warn(`跳过缺失图片: ${imgPath}`); 
+                        }
+                    );
+                }, i * 30);
+
+                // 动画目标设置
+                photoTgt.tree.push({ pos: new THREE.Vector3(0, -700+i*20, 0), scale: new THREE.Vector3(0,0,0), rot: new THREE.Euler(0,0,0) });
+
+                const turns = CONFIG.spiralTurns; const hRange = CONFIG.spiralHeight; const ratio = i / CONFIG.photos;
+                const theta = ratio * Math.PI * 2 * turns;
+                const y = -hRange/2 + ratio * hRange;
+                const r = 1250; 
+                const pos = new THREE.Vector3(Math.cos(theta)*r, y, Math.sin(theta)*r);
+                const dummyObj = new THREE.Object3D(); dummyObj.position.copy(pos); dummyObj.lookAt(0, y, 0);
+
+                photoTgt.spiral.push({ pos, scale: new THREE.Vector3(1,1,1), rot: dummyObj.rotation });
+            }
+        }
+
+        function createStar() {
+            const g = new THREE.IcosahedronGeometry(70, 0);
+            const m = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
+            const glow = new THREE.Mesh(new THREE.IcosahedronGeometry(110, 1), new THREE.MeshBasicMaterial({color: 0xFFD700, transparent:true, opacity:0.5, blending: THREE.AdditiveBlending}));
+            star = new THREE.Group();
+            star.add(new THREE.Mesh(g, m)); star.add(glow);
+            star.position.set(0, 800, 0);
+            world.add(star);
+        }
+
+        function createSnow() {
+            const geo = new THREE.BufferGeometry();
+            const pos = [];
+            for(let i=0; i<1500; i++) pos.push((Math.random()-0.5)*3000, (Math.random()-0.5)*3000, (Math.random()-0.5)*3000);
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            snow = new THREE.Points(geo, new THREE.PointsMaterial({color:0xffffff, size:3, transparent:true, opacity:0.4, map: new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/sprites/snowflake1.png'), blending: THREE.AdditiveBlending, depthWrite: false}));
+            scene.add(snow);
+        }
+
+        function transform(mode, duration = 1500) {
+            if(state.mode === mode) return;
+            state.mode = mode;
+            const isTree = mode === 'tree';
+            
+            if(isTree) {
+                state.rot.y = 0; 
+                new TWEEN.Tween(world.position).to({y: 0}, duration).easing(TWEEN.Easing.Exponential.InOut).start();
+                new TWEEN.Tween(world.rotation).to({y: 0}, duration).easing(TWEEN.Easing.Exponential.InOut).start();
+            }
+
+            new TWEEN.Tween(state.mix).to({ val: isTree ? 1 : 0 }, duration).easing(TWEEN.Easing.Exponential.InOut).start();
+
+            photoObjs.forEach((o, i) => {
+                const t = photoTgt[mode][i];
+                new TWEEN.Tween(o.position).to(t.pos, duration).easing(TWEEN.Easing.Exponential.InOut).start();
+                new TWEEN.Tween(o.rotation).to({x:t.rot.x, y:t.rot.y, z:t.rot.z}, duration).easing(TWEEN.Easing.Exponential.InOut).start();
+                // 缩放动画
+                new TWEEN.Tween(o.scale).to(t.scale, duration).easing(TWEEN.Easing.Back.Out).start();
+            });
+            new TWEEN.Tween(star.scale).to(isTree ? {x:1, y:1, z:1} : {x:0, y:0, z:0}, 1000).easing(TWEEN.Easing.Elastic.Out).start();
+        }
+
+        const vid = document.getElementById('input_video');
+        const can = document.getElementById('output_canvas');
+        const ctx = can.getContext('2d');
+
+        function onResults(res) {
+            can.width = 640; can.height = 480;
+            ctx.save(); ctx.clearRect(0, 0, can.width, can.height);
+            if (res.multiHandLandmarks && window.drawConnectors) {
+                for (const landmarks of res.multiHandLandmarks) {
+                    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#FFD700', lineWidth: 2});
+                    drawLandmarks(ctx, landmarks, {color: '#FFD700', lineWidth: 1, radius: 2});
+                }
+                res.multiHandLandmarks.forEach((lm, i) => {
+                    const label = res.multiHandedness[i].label;
+                    if(label === 'Right') handleRight(lm);
+                    if(label === 'Left') handleLeft(lm);
+                });
+            } else {
+                state.rot.speed = 0; 
+            }
+            ctx.restore();
+        }
+
+        function handleRight(lm) {
+            const isDown = (t, p) => lm[t].y > lm[p].y;
+            const closed = [8,12,16,20].filter(i => isDown(i, i-2)).length;
+            if(closed === 4) transform('tree');
+            else if(closed <= 1) transform('spiral');
+
+            if(state.mode === 'spiral') {
+                const dx = lm[9].x - 0.5;
+                if(Math.abs(dx) > CONFIG.controls.deadZone) {
+                    state.rot.speed = (dx - Math.sign(dx)*CONFIG.controls.deadZone) * CONFIG.controls.speed;
+                } else {
+                    state.rot.speed = 0;
+                }
+            } else {
+                state.rot.speed = 0;
+            }
+        }
+
+        function handleLeft(lm) {
+            if(state.mode === 'tree') return;
+            const idx = lm[8], thb = lm[4];
+            const ndc = new THREE.Vector2((idx.x * 2) - 1, 1 - (idx.y * 2)); 
+            const pinch = Math.sqrt(Math.pow(idx.x-thb.x,2) + Math.pow(idx.y-thb.y,2)) < CONFIG.controls.pinch;
+            
+            raycaster.setFromCamera(ndc, camera);
+            const hits = raycaster.intersectObjects(photoObjs, true);
+
+            if(hits.length > 0) {
+                let hitGroup = hits[0].object;
+                while(hitGroup.parent && hitGroup.parent !== photoGroup) { hitGroup = hitGroup.parent; }
+                
+                // 只有 visible 的 group 才能被交互
+                if (!hitGroup.visible) return;
+
+                if(state.interact.hover !== hitGroup) {
+                    if(state.interact.hover) {
+                        state.interact.hover.renderOrder = 10;
+                        state.interact.hover.children.forEach(c => c.material.depthTest = true);
+                        new TWEEN.Tween(state.interact.hover.scale).to({x:1, y:1, z:1}, 200).start();
+                    }
+                    state.interact.hover = hitGroup;
+                    if(hitGroup !== state.interact.active) new TWEEN.Tween(hitGroup.scale).to({x:1.3, y:1.3, z:1.3}, 200).start();
+                }
+                
+                if(pinch && !state.interact.active) {
+                    state.interact.active = hitGroup;
+                    hitGroup.renderOrder = 99999;
+                    hitGroup.children.forEach(c => c.material.depthTest = false);
+
+                    const cDir = new THREE.Vector3(); camera.getWorldDirection(cDir);
+                    const tPos = camera.position.clone().add(cDir.multiplyScalar(500));
+                    world.worldToLocal(tPos); 
+                    const targetYRot = -world.rotation.y;
+
+                    new TWEEN.Tween(hitGroup.position).to(tPos, 500).easing(TWEEN.Easing.Back.Out).start();
+                    new TWEEN.Tween(hitGroup.scale).to({x:3.5, y:3.5, z:3.5}, 500).easing(TWEEN.Easing.Back.Out).start();
+                    new TWEEN.Tween(hitGroup.rotation).to({ x: 0, y: targetYRot, z: 0 }, 500).easing(TWEEN.Easing.Back.Out).start();
+
+                    document.getElementById('status-text').innerText = "PHOTO MAXIMIZED";
+                }
+            } else if(state.interact.hover && state.interact.hover !== state.interact.active) {
+                state.interact.hover.renderOrder = 10;
+                state.interact.hover.children.forEach(c => c.material.depthTest = true);
+                new TWEEN.Tween(state.interact.hover.scale).to({x:1, y:1, z:1}, 200).start();
+                state.interact.hover = null;
+            }
+
+            if(!pinch && state.interact.active) {
+                const obj = state.interact.active;
+                const t = photoTgt.spiral[obj.userData.id];
+                obj.renderOrder = 10;
+                obj.children.forEach(c => c.material.depthTest = true);
+
+                new TWEEN.Tween(obj.position).to(t.pos, 500).start();
+                new TWEEN.Tween(obj.scale).to({x:1, y:1, z:1}, 500).start();
+                new TWEEN.Tween(obj.rotation).to({x:t.rot.x, y:t.rot.y, z:t.rot.z}, 500).start();
+                
+                state.interact.active = null;
+                document.getElementById('status-text').innerText = "SYSTEM READY";
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            TWEEN.update();
+            const time = clock.getElapsedTime();
+            const mix = state.mix.val;
+
+            updateInstancedMesh(sphereMesh, pData.spheres, mix, time);
+            updateInstancedMesh(cubeMesh, pData.cubes, mix, time);
+
+            if(state.mode === 'spiral' && !state.interact.active) {
+                state.rot.y += state.rot.speed;
+                state.rot.speed *= CONFIG.controls.damping;
+                state.rot.y = THREE.MathUtils.clamp(state.rot.y, CONFIG.controls.maxRotRight, CONFIG.controls.maxRotLeft);
+                world.rotation.y = state.rot.y;
+                const screwFactor = 300; 
+                world.position.y = -state.rot.y / (Math.PI * 2) * screwFactor;
+
+            } else if (state.mode === 'tree') {
+                world.rotation.y += 0.001;
+            }
+            
+            if(star) star.rotation.y -= 0.015;
+            composer.render();
+        }
+
+        function updateInstancedMesh(mesh, data, mix, time) {
+            for (let i = 0; i < data.length; i++) {
+                const { tPos, sPos, scale, speed } = data[i];
+                dummy.position.lerpVectors(sPos, tPos, mix);
+                const float = Math.sin(time * speed * 2) * (mix > 0.5 ? 5 : 10);
+                dummy.position.y += float;
+                dummy.scale.setScalar(scale);
+                if(mix > 0.8) dummy.rotation.y += speed * 0.01;
+                dummy.updateMatrix();
+                mesh.setMatrixAt(i, dummy.matrix);
+            }
+            mesh.instanceMatrix.needsUpdate = true;
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6, selfieMode: true});
+        hands.onResults(onResults);
+        
+        const cameraUtils = new Camera(vid, {
+            onFrame: async () => { await hands.send({image: vid}); },
+            width: 640, height: 480
+        });
+        cameraUtils.start();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth/window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>
